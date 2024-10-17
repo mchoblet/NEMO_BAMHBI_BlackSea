@@ -1,2 +1,4 @@
 # NEMO_BAMHBI_BlackSea
-Set of notebooks and scripts around the NEMO Bambhi Black Sea model
+Set of notebooks and scripts around the NEMO Bamhbi Black Sea model.
+
+Meant to help getting started working with the model output data, documenting how forcing files were created ...
