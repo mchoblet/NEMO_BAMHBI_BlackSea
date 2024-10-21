@@ -501,7 +501,7 @@ for river in river_names:
     for var, factor in vars_bgc_sec.items():
         river_data[river][var] = factor * river_data[river]['sorunoff'] #multiplicator times runoff
     river_data[river]['rosaline'] = xr.DataArray(data=np.ones((len(times_all))) * 2, dims=['time'], coords={'time': times_all})
-    river_data[river]['rodepth'] = xr.DataArray(data=np.ones((len(times_all))) * 13, dims=['time'], coords={'time': times_all})  # Assume all rivers are 9 meters deep at their mouth (FORTRAN depth level index 13)
+    river_data[river]['rodepth'] = xr.DataArray(data=np.ones((len(times_all))) * 10, dims=['time'], coords={'time': times_all})  # Assume all rivers are 10 meters deep at their mouth (FORTRAN depth level index 13)
     # Better than taking -999 (depth until ground), because especially for Turkish and Georgian rivers,
     # bathymetry is directly very steep and we'd have fresh water at large depths
 
@@ -651,3 +651,4 @@ for key, domdic in domains.items():
             year_data.to_netcdf(path, unlimited_dims=["time"],encoding={v:{'_FillValue': None} for v in year_data.data_vars},format="NETCDF4_CLASSIC")
             #year_data.to_netcdf(path, unlimited_dims=["time"],format="NETCDF4_CLASSIC")
 print("Forcing file creation completed.")
+
