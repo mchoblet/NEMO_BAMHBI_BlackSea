@@ -265,6 +265,8 @@ for i, river in enumerate(['Dnepr', 'Dnestr'], start=1):
                                      .sel(time=times_all, method='nearest'))
 
 
+
+
 ############################ FOR THE OTHER RIVERS: USE SESAME AND EFAS  ############################
 #yearly sesame data is distributed across months according to efas (1992-2000) climatology.
 #sesame is 'debiased' with respect to efas
@@ -387,6 +389,8 @@ dox = process_dox(df_dox)
 for riv in river_names:
     river_data[riv]['DOX'] = dox*river_data[riv]['sorunoff']
 
+
+
 ############################ NUTRIENTS ############################
 def calculate_linear_regression(x, y):
     """Calculate linear regression for nutrient-water flux relationship."""
@@ -405,21 +409,50 @@ def process_river_nutrients(river, runoff):
     flux_ds = runoff.sel(time=slice("1960", "2000")).resample(time='YS').mean()
     nutrients = {name: get_nutrient_convert(df, river, name) 
                  for name, df in zip(['sil', 'no3', 'po4'], [sil, no3, po4])}
-    #get runoff climatology for monthly distribution
-    mean_cycle_90s = runoff.sel(time=slice("1992", "2000")).groupby('time.month').mean()
-    mean_cycle_normalized_90s = mean_cycle_90s / mean_cycle_90s.sum()
-
+    #For each month of the years get the relative discharge importance wrt to yearly discharge
+    #this will be repetetive for all rivers except danube, dnepr and dnestr. 
+    suma=runoff.sel(time=slice("1960", "2000")).groupby('time.year').sum()
+    perc=(runoff.sel(time=slice("1960", "2000")).groupby('time.year')/suma)
+    #mean_cycle_90s = runoff.sel(time=slice("1992", "2000")).groupby('time.month').mean() 
+    #mean_cycle_normalized_90s = mean_cycle_90s / mean_cycle_90s.sum()
+    
     #convert from per month to per seconds
     nutrients_monthly = {name: (nutrient.resample(time='MS').ffill()
-                                .reindex(time=time_sesam, method='nearest')
-                                .groupby('time.month') * mean_cycle_normalized_90s / (30.417 * 24 * 3600))
+                                .reindex(time=time_sesam, method='nearest')*perc.values / (30.417 * 24 * 3600))
                          for name, nutrient in nutrients.items()}
-    
-    fifties_climatology = {name: xr.DataArray(data=np.tile(nutrient.sel(time=slice("1960", "1969")).groupby('time.month').mean().values, 10),
-                                              coords={'time': xr.cftime_range(start='1950', end='1959-12', freq='MS', calendar='standard')}, 
-                                              dims=['time'])
-                           for name, nutrient in nutrients_monthly.items()}
 
+    # Calculate climatology for each nutrient for the 50s (no sesame data)
+    runoff_50s = runoff.sel(time=slice("1950", "1959"))
+    suma50s = runoff_50s.groupby('time.year').sum()
+    perc50s = runoff_50s.groupby('time.year') / suma50s
+    
+    # Create time ranges
+    time_range_50s = xr.cftime_range(start='1950', end='1959', freq='YS', calendar='standard')
+    time_range_50s_monthly = xr.cftime_range(start='1950', end='1959-12', freq='MS', calendar='standard')
+    fifties_climatology = {}
+    for name, nutrient in nutrients.items():
+        # Calculate mean for 1960s
+        mean_60s = nutrient.sel(time=slice("1960", "1969")).mean('time')
+
+        # Create DataArray with replicated mean values
+        replicated_mean = xr.DataArray(
+            data=np.tile(mean_60s.values.item(), 10),
+            coords={'time': time_range_50s}
+        )
+
+        # Resample to monthly frequency and adjust
+        monthly_values = (
+            replicated_mean
+            .resample(time='MS')
+            .ffill()
+            .reindex(time=time_range_50s_monthly, method='nearest')
+        )
+
+        # Apply percentages (month wrt yearly discharge) and convert units
+        fifties_climatology[name] = (
+            monthly_values * perc50s.values / (30.417 * 24 * 3600)
+        )
+    
     #calculate linear regression between flux and nutrient (ludwig base nutrients) and use this to extrapolate to years after 2000.
     recent_extrapolation = {}
     coefficients = []
@@ -430,7 +463,7 @@ def process_river_nutrients(river, runoff):
         coefficients.append([slope, intercept])
     
     combined_nutrients = {name: xr.concat([fifties_climatology[name], 
-                                           nutrients_monthly[name].drop('month'), 
+                                           nutrients_monthly[name], 
                                            recent_extrapolation[name]], 
                                           dim='time').assign_coords(time=times_all)
                           for name in nutrients.keys()}
