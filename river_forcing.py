@@ -76,13 +76,13 @@ ludwig_silica_path = '/gpfs/scratch/acad/bsmfc/river_forcings/data/SESAME_LUDWIG
 #file of in-situ nutrient data (only using oxygen here)
 path_tnmn_ukraine='/gpfs/scratch/acad/bsmfc/river_forcings/data/tnmn_ukraine.csv'
 
-savepath = '/gpfs/scratch/acad/bsmfc/river_forcings/forcing_files_v1'
+savepath = '/gpfs/scratch/acad/bsmfc/river_forcings/forcing_files_v1.1'
 ################ DOMAIN AND RIVER LOCATIONS ################
 #these are the locations in the domain files (there is also a location check (border of the land sea mask) in the final function.
 
 domains={
     'lr':{
-        'path': '/gpfs/scratch/acad/bsmfc/river_forcings/data/domain_lr.nc',  
+        'path': '/gpfs/scratch/acad/bsmfc/river_forcings/data/domain_lr.nc',
                'locs': {
                    'Sakarya': [41.41555404663086, 30.51814842224121],
  'Filyos': [41.69333267211914, 31.999629974365234],
@@ -138,7 +138,7 @@ efas_pos = {
     'Yesil': [41 + 22/60, 36 + 40/60],
     'Rioni': [42.19155200000063, 41.64166730804642],
     'Inguri': [42.391556000000605, 41.55833397317132],  # not named in Ludwig dataset
-    'Coroch': [41.60820700000069, 41.57500064014634],                
+    'Coroch': [41.60820700000069, 41.57500064014634],
     'Kodori': [42 + 48/60, 41 + 9/60],
     'Bzyb': [43.19157200000052, 40.275000616094786],
 }
@@ -158,12 +158,11 @@ vars_bgc_prim = {
 }
 
 # Secondary BGC tracers with arbitrary multiplicators (multiplied with flux)
-#mainly very small values, except for BAC,DIC,TA (SMI and AGG currently disabled in simulations)
-#these numbers were more varying and in part larger, but I prefer to put them small and more equally distributed [to be discussed!]
-#also what you can do to check if these values are realistic is to compare these concentrations to typical surface concentrations in existing model data
+#In old script small numbers for organisms were used. Here we prefer them to set them completly to zero. Except for POC,PON, SMI, AGG, DIC,DA
+#Note: the values for TA, SMI, AGG come without anyjustification (some people now also run simulation without AGG and SMI)
 vars_bgc_sec = {
-    'POC': 100, 'PON': 10, 'CFL': 0.01, 'CEM': 0.01, 'CDI': 0.01, 'NFL': 0.01, 'NEM': 0.01, 'NDI': 0.01,
-    'MIC': 0.001, 'MES': 0.001, 'BAC': 0.1, 'SMI': 25, 'AGG': 82661000, 'GEL': 0, 'NOC': 0, 'DIC': 3000, 'TA': 3083
+    'POC': 100, 'PON': 10, 'CFL': 0, 'CEM': 0, 'CDI': 0, 'NFL': 0, 'NEM': 0, 'NDI': 0, 'ODU': 0,
+    'MIC': 0, 'MES': 0, 'BAC': 0, 'SMI': 25, 'AGG': 82661000, 'GEL': 0, 'NOC': 0, 'DIC': 3000, 'TA': 3083
 }
 #setting pon to 10, corresponds to about 26kt/year for the danube, about 10% or less of DIN (~300-600kt), which is ok. (10*10**(-3)*12 [mmol to molar weight]*10**(-9)[g to kilotonnes)*24*3600*365 [s -> year]*7000 [m3/s]
 #DIC 3000: comes from gems glori value (~36mg/l)
@@ -186,8 +185,9 @@ river_data = {
 
 ################ LOAD EFAS DATA ################
 #loading takes about 25seconds on my machine (efas is 6 hourly). at some we'll just store monthly values: less time and disk space
-dis_efas = xr.open_mfdataset(glob.glob(efas_paths), preprocess=lambda ds: ds.resample(time='MS').mean()['dis06'],coords='minimal').load()['dis06']
+dis_efas = xr.open_mfdataset(sorted(glob.glob(efas_paths)), preprocess=lambda ds: ds.resample(time='MS').mean()['dis06'],coords='minimal').load()['dis06']
 dis_efas = dis_efas.sel(time=slice("1992","2024-09")).drop(('surface','step'))
+
 ################ GET WATER DISCHARGE ################
 
 #HELPER FUNCTIONS FOR READING CSV FILES with varying delimiter
@@ -195,7 +195,7 @@ def detect_delimiter(file_path):
     """Detect the delimiter used in a CSV file."""
     with open(file_path, 'r') as file:
         first_line = file.readline()
-    
+
     if ',' in first_line:
         return ','
     elif ';' in first_line:
@@ -264,9 +264,6 @@ for i, river in enumerate(['Dnepr', 'Dnestr'], start=1):
                                      .drop(('latitude', 'longitude'))
                                      .sel(time=times_all, method='nearest'))
 
-
-
-
 ############################ FOR THE OTHER RIVERS: USE SESAME AND EFAS  ############################
 #yearly sesame data is distributed across months according to efas (1992-2000) climatology.
 #sesame is 'debiased' with respect to efas
@@ -277,26 +274,29 @@ def process_sesame_efas(river, lat, lon):
     flux_ds = xr.DataArray(data=sesame_flux[np.arange(1960, 2001)].T.values.flatten(), coords={'time': time_sesam})
     flux_ds = flux_ds * 10**9 / (365.25 * 24 * 60 * 60)  # Convert from km3/year to m3/second
     efas = dis_efas.sel(latitude=lat, longitude=lon, method='nearest').drop(('latitude', 'longitude'))
-    
+
     # Debias SESAME data with respect to EFAS for the overlap period
     flux_ds = flux_ds - flux_ds.sel(time=slice("1992", "2000")).mean('time') + efas.sel(time=slice("1992", "2000")).mean('time')
     flux_ds = flux_ds * (365.25 * 24 * 60 * 60)  # Convert flux from m3/second to m3/year
-    
-    
+
+    #for a single small river, the Kodri, the debiasing led to negative values, thus corrupting things. We set a minimal runoff of 10m3/second
+    minflux=10*(365.25 * 24 * 60 * 60)
+    flux_ds=xr.where(flux_ds<minflux,minflux,flux_ds)
+
     # Get the seasonality of EFAS flux
     mean_cycle_90s = efas.sel(time=slice("1992", "2000")).groupby('time.month').mean()
     mean_cycle_normalized_90s = mean_cycle_90s / mean_cycle_90s.sum()
-    
+
     # Resample to monthly, fill with repeating value
     flux_monthly = flux_ds.resample(time='MS').ffill().sel(time=slice(None, "1991"))
     flux_monthly = (flux_monthly.groupby('time.month') * mean_cycle_normalized_90s / (30.4375 * 24 * 3600)).drop('month')
-    
+
     # Compute climatology for 1950-1959
     climatology = flux_monthly.sel(time=slice("1960", "1969")).groupby('time.month').mean()
     flux_50s = xr.DataArray(data=np.tile(climatology.values, 10),
                             coords={'time': xr.cftime_range(start='1950', end='1959-12', freq='MS', calendar='standard')},
                             dims=['time'], name='flux')
-    
+
     return xr.concat([flux_50s, flux_monthly, efas], dim='time').assign_coords(time=times_all)
 
 # Process SESAME and EFAS data for rivers
@@ -390,7 +390,6 @@ for riv in river_names:
     river_data[riv]['DOX'] = dox*river_data[riv]['sorunoff']
 
 
-
 ############################ NUTRIENTS ############################
 def calculate_linear_regression(x, y):
     """Calculate linear regression for nutrient-water flux relationship."""
@@ -401,13 +400,18 @@ def get_nutrient_convert(nutrient_df, river, nutrient_name):
     """Convert nutrient data from kt/yr to mmol/year"""
     conversion_factors = {'sil': 28.0855, 'no3': 14.01, 'po4': 30.9738}
     sesame_data = nutrient_df[nutrient_df['RiverName'].str.lower() == river.lower()]
-    return xr.DataArray(data=sesame_data[np.arange(1960, 2001)].T.values.flatten(), 
+    return xr.DataArray(data=sesame_data[np.arange(1960, 2001)].T.values.flatten(),
                         coords={'time': time}) * 10**12 / conversion_factors[nutrient_name]
 
 def process_river_nutrients(river, runoff):
-    """Process nutrient data for a given river."""
+    """
+    Process nutrient data for a given river.
+    Variant where for each river, we compute the mean nutrient concentrations in 1960-1969 and simply multiply by the river runoff.
+    This allows 
+    """
+
     flux_ds = runoff.sel(time=slice("1960", "2000")).resample(time='YS').mean()
-    nutrients = {name: get_nutrient_convert(df, river, name) 
+    nutrients = {name: get_nutrient_convert(df, river, name)
                  for name, df in zip(['sil', 'no3', 'po4'], [sil, no3, po4])}
     #For each month of the years get the relative discharge importance wrt to yearly discharge
     #this will be repetetive for all rivers except danube, dnepr and dnestr. 
@@ -415,44 +419,24 @@ def process_river_nutrients(river, runoff):
     perc=(runoff.sel(time=slice("1960", "2000")).groupby('time.year')/suma)
     #mean_cycle_90s = runoff.sel(time=slice("1992", "2000")).groupby('time.month').mean() 
     #mean_cycle_normalized_90s = mean_cycle_90s / mean_cycle_90s.sum()
-    
+
     #convert from per month to per seconds
     nutrients_monthly = {name: (nutrient.resample(time='MS').ffill()
                                 .reindex(time=time_sesam, method='nearest')*perc.values / (30.417 * 24 * 3600))
                          for name, nutrient in nutrients.items()}
 
-    # Calculate climatology for each nutrient for the 50s (no sesame data)
+    # Calculate nutrients in the 50s from mean concentration in the period 1960-1969 and multiply it by river flux
+    runoff_60s = runoff.sel(time=slice("1960", "1969")).resample(time='YS').mean()
     runoff_50s = runoff.sel(time=slice("1950", "1959"))
-    suma50s = runoff_50s.groupby('time.year').sum()
-    perc50s = runoff_50s.groupby('time.year') / suma50s
-    
-    # Create time ranges
-    time_range_50s = xr.cftime_range(start='1950', end='1959', freq='YS', calendar='standard')
-    time_range_50s_monthly = xr.cftime_range(start='1950', end='1959-12', freq='MS', calendar='standard')
-    fifties_climatology = {}
+
+    fifties_nut = {}
+
     for name, nutrient in nutrients.items():
-        # Calculate mean for 1960s
-        mean_60s = nutrient.sel(time=slice("1960", "1969")).mean('time')
+        # Calculate mean concentration for 1960s
+        nut_60s = (nutrient.sel(time=slice("1960", "1969"))/(365*24*3600))
+        conc_mean=(nut_60s/runoff_60s.values).mean('time').values.item()
+        fifties_nut[name] = (runoff_50s*conc_mean)
 
-        # Create DataArray with replicated mean values
-        replicated_mean = xr.DataArray(
-            data=np.tile(mean_60s.values.item(), 10),
-            coords={'time': time_range_50s}
-        )
-
-        # Resample to monthly frequency and adjust
-        monthly_values = (
-            replicated_mean
-            .resample(time='MS')
-            .ffill()
-            .reindex(time=time_range_50s_monthly, method='nearest')
-        )
-
-        # Apply percentages (month wrt yearly discharge) and convert units
-        fifties_climatology[name] = (
-            monthly_values * perc50s.values / (30.417 * 24 * 3600)
-        )
-    
     #calculate linear regression between flux and nutrient (ludwig base nutrients) and use this to extrapolate to years after 2000.
     recent_extrapolation = {}
     coefficients = []
@@ -461,13 +445,13 @@ def process_river_nutrients(river, runoff):
         nutrient_flux = slope * runoff.sel(time=slice("2001", None)) + intercept
         recent_extrapolation[name] = nutrient_flux
         coefficients.append([slope, intercept])
-    
-    combined_nutrients = {name: xr.concat([fifties_climatology[name], 
-                                           nutrients_monthly[name], 
-                                           recent_extrapolation[name]], 
+
+    combined_nutrients = {name: xr.concat([fifties_nut[name],
+                                           nutrients_monthly[name],
+                                           recent_extrapolation[name]],
                                           dim='time').assign_coords(time=times_all)
                           for name in nutrients.keys()}
-    
+
     return combined_nutrients, coefficients
 
 # Load nutrient data
@@ -501,11 +485,10 @@ for river in river_names:
     for var, factor in vars_bgc_sec.items():
         river_data[river][var] = factor * river_data[river]['sorunoff'] #multiplicator times runoff
     river_data[river]['rosaline'] = xr.DataArray(data=np.ones((len(times_all))) * 2, dims=['time'], coords={'time': times_all})
-    river_data[river]['rodepth'] = xr.DataArray(data=np.ones((len(times_all))) * 10, dims=['time'], coords={'time': times_all})  # Assume all rivers are 10 meters deep at their mouth (FORTRAN depth level index 13)
+    river_data[river]['rodepth'] = xr.DataArray(data=np.ones((len(times_all))) * 9, dims=['time'], coords={'time': times_all})  # Assume all rivers are 9 meters deep at their mouth 
     # Better than taking -999 (depth until ground), because especially for Turkish and Georgian rivers,
     # bathymetry is directly very steep and we'd have fresh water at large depths
-
-
+ 
 ############################ CREATE FORCING FILES ############################
 def check_location(lat, lon, riv, domain):
     """Check if the given location is valid for river discharge according to domain['top_level'] (land-sea mask)"""
@@ -651,4 +634,3 @@ for key, domdic in domains.items():
             year_data.to_netcdf(path, unlimited_dims=["time"],encoding={v:{'_FillValue': None} for v in year_data.data_vars},format="NETCDF4_CLASSIC")
             #year_data.to_netcdf(path, unlimited_dims=["time"],format="NETCDF4_CLASSIC")
 print("Forcing file creation completed.")
-
